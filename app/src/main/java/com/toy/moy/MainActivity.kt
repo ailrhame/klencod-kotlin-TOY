@@ -1,9 +1,11 @@
 package com.toy.moy
 
+import android.Manifest
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
@@ -11,16 +13,14 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
 import android.os.IBinder
-import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
@@ -40,20 +40,18 @@ class MainActivity : Activity() {
     private val colorSurface = 0xFF161B22.toInt()
     private val colorSurfaceAlt = 0xFF21262D.toInt()
     private val colorPrimary = 0xFF1F6FEB.toInt()
-    private val colorPrimaryLight = 0xFF58A6FF.toInt()
     private val colorText = 0xFFE6EDF3.toInt()
     private val colorMuted = 0xFF8B949E.toInt()
     private val colorBorder = 0xFF30363D.toInt()
     private val colorSuccess = 0xFF3FB950.toInt()
     private val colorDanger = 0xFFF85149.toInt()
     private val colorGreen = 0xFF238636.toInt()
-    private val colorGreenLight = 0xFF56D364.toInt()
+    private val colorRed = 0xFFDA3633.toInt()
 
     private lateinit var etMessage: EditText
     private lateinit var etSeconds: EditText
     private lateinit var tvAdminStatus: TextView
-    private lateinit var tvOverlayStatus: TextView
-    private lateinit var tvServiceStatus: TextView
+    private lateinit var tvNotifStatus: TextView
 
     private val prefs by lazy {
         getSharedPreferences("fakelock", Context.MODE_PRIVATE)
@@ -79,13 +77,13 @@ class MainActivity : Activity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, -1))
 
         val title = TextView(this).apply {
-            text = "🔒 FakeLock"
+            text = "🔒 FakeLock (Call)"
             setTextColor(colorText)
-            setTextSize(26f)
+            setTextSize(24f)
             typeface = Typeface.DEFAULT_BOLD
         }
         val subtitle = TextView(this).apply {
-            text = "شاشة وهمية عند محاولة فتح القفل"
+            text = "شاشة اتصال وهمي عند محاولة فتح القفل"
             setTextColor(colorMuted)
             setTextSize(13f)
             setPadding(0, dp(4), 0, dp(20))
@@ -94,28 +92,20 @@ class MainActivity : Activity() {
         content.addView(subtitle)
 
         val settingsCard = makeCard("⚙ الإعدادات")
-
-        val msgLabel = makeLabel("نص الرسالة")
-        settingsCard.addView(msgLabel)
-
+        settingsCard.addView(makeLabel("اسم المتصل"))
         etMessage = EditText(this).apply {
             setTextColor(colorText)
             setHintTextColor(colorMuted)
-            hint = "تم اكتشاف وصول غير مصرح به"
+            hint = "جهة اتصال مجهولة"
             setTextSize(14f)
             background = makeInputDrawable()
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            setText(prefs.getString("message", "تم اكتشاف وصول غير مصرح به"))
+            setText(prefs.getString("message", "جهة اتصال مجهولة"))
             setSelection(text.length)
         }
-        val msgLp = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
-        settingsCard.addView(etMessage, msgLp)
+        settingsCard.addView(etMessage, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
 
-        val secLabel = makeLabel("مدة العداد (ثانية)").apply {
-            setPadding(0, dp(12), 0, 0)
-        }
-        settingsCard.addView(secLabel)
-
+        settingsCard.addView(makeLabel("مدة الرنين (ثانية)").apply { setPadding(0, dp(12), 0, 0) })
         etSeconds = EditText(this).apply {
             setTextColor(colorText)
             setHintTextColor(colorMuted)
@@ -126,101 +116,40 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setText(prefs.getInt("seconds", 15).toString())
         }
-        val secLp = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
-        settingsCard.addView(etSeconds, secLp)
+        settingsCard.addView(etSeconds, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
 
         val saveBtn = makePrimaryButton("💾 حفظ الإعدادات", colorSurfaceAlt, colorBorder, colorText)
         saveBtn.setOnClickListener { saveSettings() }
-        val saveLp = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(14) }
-        settingsCard.addView(saveBtn, saveLp)
-
+        settingsCard.addView(saveBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(14) })
         content.addView(settingsCard, cardLp())
 
-        val permCard = makeCard("🔑 الصلاحيات")
-
-        val adminRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val adminLabel = makeLabel("Device Admin").apply {
-            setTextSize(14f)
-            setTextColor(colorText)
-        }
-        adminRow.addView(adminLabel, LinearLayout.LayoutParams(0, -2, 1f))
-
-        tvAdminStatus = TextView(this).apply {
-            setTextSize(12f)
-            setPadding(dp(8), 0, dp(10), 0)
-        }
+        val permCard = makeCard("🔑 الصلاحيات المطلوبة")
+        
+        val adminRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        adminRow.addView(makeLabel("Device Admin").apply { setTextSize(14f); setTextColor(colorText) }, LinearLayout.LayoutParams(0, -2, 1f))
+        tvAdminStatus = TextView(this).apply { setTextSize(12f); setPadding(dp(8), 0, dp(10), 0) }
         adminRow.addView(tvAdminStatus)
-
-        val adminBtn = makeSmallButton("تفعيل").apply {
-            setOnClickListener { requestAdmin() }
-        }
-        adminRow.addView(adminBtn, LinearLayout.LayoutParams(-2, dp(34)))
-
+        adminRow.addView(makeSmallButton("تفعيل").apply { setOnClickListener { requestAdmin() } }, LinearLayout.LayoutParams(-2, dp(34)))
         permCard.addView(adminRow)
 
-        val overlayRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val overlayLabel = makeLabel("الرسم فوق التطبيقات").apply {
-            setTextSize(14f)
-            setTextColor(colorText)
-        }
-        overlayRow.addView(overlayLabel, LinearLayout.LayoutParams(0, -2, 1f))
-
-        tvOverlayStatus = TextView(this).apply {
-            setTextSize(12f)
-            setPadding(dp(8), 0, dp(10), 0)
-        }
-        overlayRow.addView(tvOverlayStatus)
-
-        val overlayBtn = makeSmallButton("تفعيل").apply {
-            setOnClickListener { requestOverlay() }
-        }
-        overlayRow.addView(overlayBtn, LinearLayout.LayoutParams(-2, dp(34)))
-
-        val overlayRowLp = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
-        permCard.addView(overlayRow, overlayRowLp)
+        val notifRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        notifRow.addView(makeLabel("إشعارات المكالمات").apply { setTextSize(14f); setTextColor(colorText) }, LinearLayout.LayoutParams(0, -2, 1f))
+        tvNotifStatus = TextView(this).apply { setTextSize(12f); setPadding(dp(8), 0, dp(10), 0) }
+        notifRow.addView(tvNotifStatus)
+        notifRow.addView(makeSmallButton("تفعيل").apply { setOnClickListener { requestNotificationPermission() } }, LinearLayout.LayoutParams(-2, dp(34)))
+        permCard.addView(notifRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
 
         content.addView(permCard, cardLp())
 
         val ctrlCard = makeCard("▶ التحكم")
-
-        val startBtn = makePrimaryButton(
-            "تشغيل المراقبة", colorGreen, colorGreenLight, Color.WHITE
-        )
+        val startBtn = makePrimaryButton("تشغيل المراقبة", colorGreen, colorSuccess, Color.WHITE)
         startBtn.setOnClickListener { startMonitoring() }
         ctrlCard.addView(startBtn, LinearLayout.LayoutParams(-1, dp(52)))
 
-        val testBtn = makePrimaryButton(
-            "🧪 اختبار الشاشة السوداء", colorPrimary, colorPrimaryLight, Color.WHITE
-        )
-        testBtn.setOnClickListener { testOverlay() }
-        val testLp = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
-        ctrlCard.addView(testBtn, testLp)
-
-        tvServiceStatus = TextView(this).apply {
-            text = "الخدمة متوقفة"
-            setTextColor(colorMuted)
-            setTextSize(12f)
-            setPadding(0, dp(12), 0, 0)
-            gravity = Gravity.CENTER
-        }
-        ctrlCard.addView(tvServiceStatus)
-
+        val testBtn = makePrimaryButton("🧪 اختبار الاتصال الوهمي", colorPrimary, colorPrimary, Color.WHITE)
+        testBtn.setOnClickListener { testFakeCall() }
+        ctrlCard.addView(testBtn, LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) })
         content.addView(ctrlCard, cardLp())
-
-        val footer = TextView(this).apply {
-            text = "© 2026 FakeLock — KlencodIDE"
-            setTextColor(colorMuted)
-            setTextSize(11f)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(20), 0, 0)
-        }
-        content.addView(footer)
 
         setContentView(root)
     }
@@ -240,59 +169,26 @@ class MainActivity : Activity() {
                 setStroke(dp(1), colorBorder)
             }
         }
-        val t = TextView(this).apply {
+        card.addView(TextView(this).apply {
             text = titleText
             setTextColor(colorText)
             setTextSize(15f)
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 0, 0, dp(10))
-        }
-        card.addView(t)
+        })
         return card
     }
 
-    private fun cardLp(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
-
-    private fun makeLabel(text: String): TextView =
-        TextView(this).apply {
-            this.text = text
-            setTextColor(colorMuted)
-            setTextSize(12f)
-        }
-
-    private fun makeInputDrawable(): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(colorSurfaceAlt)
-            cornerRadius = dp(8).toFloat()
-            setStroke(dp(1), colorBorder)
-        }
-
-    private fun makePrimaryButton(
-        text: String, bg: Int, stroke: Int, txt: Int
-    ): Button = Button(this).apply {
-        this.text = text
-        setTextSize(14f)
-        isAllCaps = false
-        setTextColor(txt)
-        typeface = Typeface.DEFAULT_BOLD
-        background = GradientDrawable().apply {
-            setColor(bg)
-            cornerRadius = dp(12).toFloat()
-            setStroke(dp(1), stroke)
-        }
-        setPadding(dp(12), 0, dp(12), 0)
+    private fun cardLp() = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
+    private fun makeLabel(text: String) = TextView(this).apply { this.text = text; setTextColor(colorMuted); setTextSize(12f) }
+    private fun makeInputDrawable() = GradientDrawable().apply { setColor(colorSurfaceAlt); cornerRadius = dp(8).toFloat(); setStroke(dp(1), colorBorder) }
+    private fun makePrimaryButton(text: String, bg: Int, stroke: Int, txt: Int) = Button(this).apply {
+        this.text = text; setTextSize(14f); isAllCaps = false; setTextColor(txt); typeface = Typeface.DEFAULT_BOLD
+        background = GradientDrawable().apply { setColor(bg); cornerRadius = dp(12).toFloat(); setStroke(dp(1), stroke) }
     }
-
-    private fun makeSmallButton(text: String): Button = Button(this).apply {
-        this.text = text
-        setTextSize(12f)
-        isAllCaps = false
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(colorPrimary)
-            cornerRadius = dp(8).toFloat()
-        }
+    private fun makeSmallButton(text: String) = Button(this).apply {
+        this.text = text; setTextSize(12f); isAllCaps = false; setTextColor(Color.WHITE)
+        background = GradientDrawable().apply { setColor(colorPrimary); cornerRadius = dp(8).toFloat() }
         setPadding(dp(14), 0, dp(14), 0)
     }
 
@@ -303,87 +199,106 @@ class MainActivity : Activity() {
         tvAdminStatus.text = if (adminOn) "✅" else "❌"
         tvAdminStatus.setTextColor(if (adminOn) colorSuccess else colorDanger)
 
-        val overlayOn = Settings.canDrawOverlays(this)
-        tvOverlayStatus.text = if (overlayOn) "✅" else "❌"
-        tvOverlayStatus.setTextColor(if (overlayOn) colorSuccess else colorDanger)
+        val notifOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
+        tvNotifStatus.text = if (notifOn) "✅" else "❌"
+        tvNotifStatus.setTextColor(if (notifOn) colorSuccess else colorDanger)
     }
 
     private fun requestAdmin() {
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-        intent.putExtra(
-            DevicePolicyManager.EXTRA_DEVICE_ADMIN,
-            ComponentName(this, MyDeviceAdminReceiver::class.java)
-        )
-        intent.putExtra(
-            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-            "مطلوب لمراقبة محاولات فتح القفل الفاشلة"
-        )
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+        intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(this, MyDeviceAdminReceiver::class.java))
+        intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "مطلوب لمراقبة محاولات فتح القفل الفاشلة")
+        try { startActivity(intent) } catch (e: Exception) { Toast.makeText(this, "خطأ: ${e.message}", Toast.LENGTH_LONG).show() }
     }
 
-    private fun requestOverlay() {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
-        )
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+        } else {
+            Toast.makeText(this, "الصلاحية مفعلة تلقائياً", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun saveSettings() {
-        val msg = etMessage.text.toString().ifBlank { "تم اكتشاف وصول غير مصرح به" }
+        val msg = etMessage.text.toString().ifBlank { "جهة اتصال مجهولة" }
         val sec = etSeconds.text.toString().toIntOrNull()?.coerceIn(3, 3600) ?: 15
-        prefs.edit()
-            .putString("message", msg)
-            .putInt("seconds", sec)
-            .apply()
+        prefs.edit().putString("message", msg).putInt("seconds", sec).apply()
         Toast.makeText(this, "تم الحفظ", Toast.LENGTH_SHORT).show()
     }
 
     private fun startMonitoring() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "فعّل صلاحية Overlay أولاً", Toast.LENGTH_SHORT).show()
-            return
-        }
         val dpm = getSystemService(DevicePolicyManager::class.java)
         val comp = ComponentName(this, MyDeviceAdminReceiver::class.java)
         if (dpm == null || !dpm.isAdminActive(comp)) {
-            Toast.makeText(this, "تنبيه: فعّل Device Admin لتعمل المراقبة تلقائياً", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "يجب تفعيل Device Admin أولاً", Toast.LENGTH_LONG).show()
+            return
         }
         val svc = Intent(this, LockMonitorService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(svc)
-        } else {
-            startService(svc)
-        }
-        tvServiceStatus.text = "✅ المراقبة نشطة"
-        tvServiceStatus.setTextColor(colorSuccess)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc) else startService(svc)
         Toast.makeText(this, "المراقبة تعمل الآن", Toast.LENGTH_SHORT).show()
     }
 
-    private fun testOverlay() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "فعّل صلاحية Overlay أولاً", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val act = Intent(this, FakeLockActivity::class.java)
-        startActivity(act)
+    private fun testFakeCall() {
+        FakeCallManager.triggerFakeCall(this)
     }
 }
 
 // ============================================================
-// شاشة القفل الوهمية (تخترق شاشة القفل)
+// FakeCallManager: إدارة إشعار المكالمة الوهمية
 // ============================================================
-class FakeLockActivity : Activity() {
+object FakeCallManager {
+    private const val CHANNEL_ID = "fake_call_channel"
+
+    fun triggerFakeCall(context: Context) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, "مكالمات واردة",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            nm.createNotificationChannel(channel)
+        }
+
+        val fullScreenIntent = Intent(context, FakeCallActivity::class.java)
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, 0, fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context).setPriority(Notification.PRIORITY_MAX)
+        }
+
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentTitle("مكالمة واردة")
+            .setContentText("جهة اتصال مجهولة")
+            .setCategory(Notification.CATEGORY_CALL)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .build()
+
+        nm.notify(999, notification)
+    }
+}
+
+// ============================================================
+// FakeCallActivity: شاشة المكالمة الوهمية
+// ============================================================
+class FakeCallActivity : Activity() {
     private var countdownTimer: CountDownTimer? = null
-    private var volumeReceiver: BroadcastReceiver? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -400,179 +315,165 @@ class FakeLockActivity : Activity() {
         }
 
         val prefs = getSharedPreferences("fakelock", Context.MODE_PRIVATE)
-        val message = prefs.getString("message", "تم اكتشاف وصول غير مصرح به") ?: ""
+        val callerName = prefs.getString("message", "جهة اتصال مجهولة") ?: "جهة اتصال مجهولة"
         val seconds = prefs.getInt("seconds", 15).toLong()
 
-        val root = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
-            isFocusableInTouchMode = true
-            isFocusable = true
-            requestFocus()
-        }
-
-        val container = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            layoutParams = FrameLayout.LayoutParams(-1, -1)
+            setBackgroundColor(0xFF111111.toInt())
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(32, 100, 32, 80)
         }
 
-        val icon = TextView(this).apply {
-            text = "⚠"
-            setTextColor(0xFFF85149.toInt())
-            textSize = 64f
+        val tvStatus = TextView(this).apply {
+            text = "مكالمة واردة..."
+            setTextColor(0xFFAAAAAA.toInt())
+            textSize = 18f
             gravity = Gravity.CENTER
         }
 
-        val tvMsg = TextView(this).apply {
-            text = message
+        val tvCaller = TextView(this).apply {
+            text = callerName
             setTextColor(Color.WHITE)
-            textSize = 22f
-            gravity = Gravity.CENTER
+            textSize = 32f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(48, 24, 48, 24)
-        }
-
-        val tvCountdown = TextView(this).apply {
-            setTextColor(0xFFF85149.toInt())
-            textSize = 52f
             gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 16, 0, 0)
         }
 
-        val tvHint = TextView(this).apply {
-            text = "اضغط زر الصوت للإخفاء"
-            setTextColor(0xFF666666.toInt())
-            textSize = 13f
+        val tvTimer = TextView(this).apply {
+            setTextColor(0xFFAAAAAA.toInt())
+            textSize = 16f
             gravity = Gravity.CENTER
-            setPadding(0, 24, 0, 0)
+            setPadding(0, 16, 0, 0)
         }
 
-        container.addView(icon)
-        container.addView(tvMsg)
-        container.addView(tvCountdown)
-        container.addView(tvHint)
-        root.addView(container)
+        val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1f) }
 
-        root.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN &&
-                (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-                        keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
-                finish()
-                true
-            } else false
+        val buttonsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
         }
+
+        // زر الرفض
+        val declineBtn = Button(this).apply {
+            text = "📞\nرفض"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFFDA3633.toInt())
+            }
+            setOnClickListener { dismissCall() }
+        }
+        val declineLp = LinearLayout.LayoutParams(100, 100).apply { setMargins(0, 0, 60, 0) }
+
+        // زر الرد
+        val answerBtn = Button(this).apply {
+            text = "📞\nرد"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFF238636.toInt())
+            }
+            setOnClickListener { dismissCall() }
+        }
+        val answerLp = LinearLayout.LayoutParams(100, 100)
+
+        buttonsRow.addView(declineBtn, declineLp)
+        buttonsRow.addView(answerBtn, answerLp)
+
+        root.addView(tvStatus)
+        root.addView(tvCaller)
+        root.addView(tvTimer)
+        root.addView(spacer)
+        root.addView(buttonsRow)
 
         setContentView(root)
-        root.requestFocus()
 
-        volumeReceiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, i: Intent?) {
-                if (i?.action == "android.media.VOLUME_CHANGED_ACTION") {
-                    finish()
-                }
-            }
-        }
-        try {
-            registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
-        } catch (_: Exception) {}
+        tvTimer.text = "الرنين... $seconds"
 
-        tvCountdown.text = "${seconds}s"
         countdownTimer = object : CountDownTimer(seconds * 1000, 1000) {
             override fun onTick(ms: Long) {
-                tvCountdown.text = "${ms / 1000}s"
+                tvTimer.text = "الرنين... ${ms / 1000}"
             }
             override fun onFinish() {
-                finish()
+                dismissCall()
             }
         }.start()
     }
 
-    override fun onDestroy() {
-        countdownTimer?.cancel()
-        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
-        super.onDestroy()
+    private fun dismissCall() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(999)
+        finish()
     }
-    
+
     override fun onBackPressed() {
         // منع زر الرجوع
+    }
+
+    override fun onDestroy() {
+        countdownTimer?.cancel()
+        super.onDestroy()
     }
 }
 
 // ============================================================
-// مستقبل محاولات القفل
+// مستقبل المحاولات الفاشلة
 // ============================================================
 class MyDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onPasswordFailed(context: Context, intent: Intent) {
         super.onPasswordFailed(context, intent)
-        val act = Intent(context, FakeLockActivity::class.java)
-        act.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        context.startActivity(act)
+        FakeCallManager.triggerFakeCall(context)
     }
 }
 
 // ============================================================
-// خدمة خلفية (تبقى شغالة)
+// خدمة خلفية
 // ============================================================
 class LockMonitorService : Service() {
-    companion object {
-        private const val CHANNEL_ID = "fakelock"
-        private const val NOTIF_ID = 1001
-    }
+    private val CHANNEL_ID = "fakelock_service"
+    private val NOTIF_ID = 1001
 
     override fun onCreate() {
         super.onCreate()
-        createChannel()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "FakeLock", NotificationManager.IMPORTANCE_LOW))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(
-                NOTIF_ID,
-                buildNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIF_ID, buildNotification())
-        }
-        return START_STICKY
-    }
-
-    private fun createChannel() {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel(
-            CHANNEL_ID, "FakeLock",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            setShowBadge(false)
-            enableVibration(false)
-        }
-        nm.createNotificationChannel(ch)
-    }
-
-    private fun buildNotification(): Notification {
-        return Notification.Builder(this, CHANNEL_ID)
+        val notif = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("🔒 FakeLock")
             .setContentText("المراقبة نشطة")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .build()
+        
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIF_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
 // ============================================================
-// التشغيل التلقائي بعد إعادة تشغيل الجهاز
+// التشغيل التلقائي
 // ============================================================
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             val svc = Intent(context, LockMonitorService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(svc)
-            } else {
-                context.startService(svc)
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(svc) else context.startService(svc)
         }
     }
 }
