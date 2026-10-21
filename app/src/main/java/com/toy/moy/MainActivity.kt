@@ -13,7 +13,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
-import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -374,89 +373,31 @@ class MainActivity : Activity() {
             Toast.makeText(this, "فعّل صلاحية Overlay أولاً", Toast.LENGTH_SHORT).show()
             return
         }
-        val svc = Intent(this, LockMonitorService::class.java)
-        svc.action = LockMonitorService.ACTION_SHOW_OVERLAY
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(svc)
-        } else {
-            startService(svc)
-        }
+        val act = Intent(this, FakeLockActivity::class.java)
+        startActivity(act)
     }
 }
 
-class MyDeviceAdminReceiver : DeviceAdminReceiver() {
-    override fun onPasswordFailed(context: Context, intent: Intent) {
-        super.onPasswordFailed(context, intent)
-        val svc = Intent(context, LockMonitorService::class.java)
-        svc.action = LockMonitorService.ACTION_SHOW_OVERLAY
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(svc)
-        } else {
-            context.startService(svc)
-        }
-    }
-}
-
-class LockMonitorService : Service() {
-
-    companion object {
-        const val ACTION_SHOW_OVERLAY = "com.toy.moy.SHOW_OVERLAY"
-        private const val CHANNEL_ID = "fakelock"
-        private const val NOTIF_ID = 1001
-    }
-
-    private lateinit var wm: WindowManager
-    private var overlayView: View? = null
+// ============================================================
+// شاشة القفل الوهمية (تخترق شاشة القفل)
+// ============================================================
+class FakeLockActivity : Activity() {
     private var countdownTimer: CountDownTimer? = null
     private var volumeReceiver: BroadcastReceiver? = null
-    private var registered = false
 
-    override fun onCreate() {
-        super.onCreate()
-        wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        createChannel()
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(
-                NOTIF_ID,
-                buildNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
         } else {
-            startForeground(NOTIF_ID, buildNotification())
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
         }
-
-        if (intent?.action == ACTION_SHOW_OVERLAY) {
-            showOverlay()
-        }
-        return START_STICKY
-    }
-
-    private fun createChannel() {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val ch = NotificationChannel(
-            CHANNEL_ID, "FakeLock",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            setShowBadge(false)
-            enableVibration(false)
-        }
-        nm.createNotificationChannel(ch)
-    }
-
-    private fun buildNotification(): Notification {
-        return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("🔒 FakeLock")
-            .setContentText("المراقبة نشطة")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun showOverlay() {
-        if (overlayView != null) return
 
         val prefs = getSharedPreferences("fakelock", Context.MODE_PRIVATE)
         val message = prefs.getString("message", "تم اكتشاف وصول غير مصرح به") ?: ""
@@ -516,46 +457,23 @@ class LockMonitorService : Service() {
             if (event.action == KeyEvent.ACTION_DOWN &&
                 (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
                         keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
-                hideOverlay()
+                finish()
                 true
             } else false
         }
 
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else
-            WindowManager.LayoutParams.TYPE_PHONE
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            type,
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            PixelFormat.OPAQUE
-        )
-
-        try {
-            wm.addView(root, params)
-            overlayView = root
-            root.requestFocus()
-        } catch (e: Exception) {
-            Toast.makeText(this, "فشل عرض الشاشة: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
+        setContentView(root)
+        root.requestFocus()
 
         volumeReceiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, i: Intent?) {
                 if (i?.action == "android.media.VOLUME_CHANGED_ACTION") {
-                    hideOverlay()
+                    finish()
                 }
             }
         }
         try {
             registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
-            registered = true
         } catch (_: Exception) {}
 
         tvCountdown.text = "${seconds}s"
@@ -564,35 +482,88 @@ class LockMonitorService : Service() {
                 tvCountdown.text = "${ms / 1000}s"
             }
             override fun onFinish() {
-                hideOverlay()
+                finish()
             }
         }.start()
     }
 
-    private fun hideOverlay() {
+    override fun onDestroy() {
         countdownTimer?.cancel()
-        countdownTimer = null
+        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+    
+    override fun onBackPressed() {
+        // منع زر الرجوع
+    }
+}
 
-        if (registered) {
-            try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
-            registered = false
-        }
-        volumeReceiver = null
+// ============================================================
+// مستقبل محاولات القفل
+// ============================================================
+class MyDeviceAdminReceiver : DeviceAdminReceiver() {
+    override fun onPasswordFailed(context: Context, intent: Intent) {
+        super.onPasswordFailed(context, intent)
+        val act = Intent(context, FakeLockActivity::class.java)
+        act.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        context.startActivity(act)
+    }
+}
 
-        overlayView?.let {
-            try { wm.removeView(it) } catch (_: Exception) {}
-        }
-        overlayView = null
+// ============================================================
+// خدمة خلفية (تبقى شغالة)
+// ============================================================
+class LockMonitorService : Service() {
+    companion object {
+        private const val CHANNEL_ID = "fakelock"
+        private const val NOTIF_ID = 1001
     }
 
-    override fun onDestroy() {
-        hideOverlay()
-        super.onDestroy()
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(
+                NOTIF_ID,
+                buildNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIF_ID, buildNotification())
+        }
+        return START_STICKY
+    }
+
+    private fun createChannel() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val ch = NotificationChannel(
+            CHANNEL_ID, "FakeLock",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            setShowBadge(false)
+            enableVibration(false)
+        }
+        nm.createNotificationChannel(ch)
+    }
+
+    private fun buildNotification(): Notification {
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("🔒 FakeLock")
+            .setContentText("المراقبة نشطة")
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setOngoing(true)
+            .build()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
+// ============================================================
+// التشغيل التلقائي بعد إعادة تشغيل الجهاز
+// ============================================================
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {

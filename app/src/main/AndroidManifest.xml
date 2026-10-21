@@ -22,6 +22,14 @@
             </intent-filter>
         </activity>
 
+        <!-- الشاشة السوداء الجديدة -->
+        <activity
+            android:name=".FakeLockActivity"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:exported="false" />
+
         <receiver
             android:name=".MyDeviceAdminReceiver"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
